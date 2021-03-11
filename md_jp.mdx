@@ -1,0 +1,209 @@
+今までは State 管理といえば、Redux でしたが、ここ最近いろんな State 管理ライブラリが出てきています。その中でも私が一番使いやすいなと思っているのが、[React Query](https://react-query.tanstack.com/)です。実際、今携わっているプロジェクトでは Redux を使っているのですが、action,reducer,api 周りなどやっぱりコード量が多くなってしまうことがつらみになっています。
+
+[React Query](https://react-query.tanstack.com/)の特徴としては
+
+- 取得したデータをキャッシュに持たせる
+- キャッシュされたデータをどのコンポーネントからでも簡単に利用可能
+- Fetch の状態を返してくれる(isLoading, error など)
+
+があります。個人的には以前に Apollo を使っていたので、isLoading などの Fetch の状態があるのはとても好印象でした。そこで、実際に携わっている Redux のプロダクトに React Query を導入したのでその理由と知見を記事にします。
+
+## **導入を決めた理由**
+
+まず導入を決めた理由として以下の 3 点が大きい理由かなと思います。
+
+- http クライアントを選ばない
+- 記述量が少ない
+- Devtools がある
+
+### **HTTP クライアントを選ばない**
+
+HTTP クライアントライブラリはなんでも OK です。axios でもいいし、なんなら GraphQL でもいい。これはかなり大きい要因だなと思っていて、例えば既存のプロダクトで Redux + Redux Saga + axios を使って API の通信周りを実装していても、axios はそのままで Redux を剥がすことができます。導入時においても段階的に React Query に書き換えができるのでまずは小さく始めることができますね。例えば、全てをガツっと Redux から剥がすとなるとなかなか大変な作業ですし、バグも生むかもしれませんが、この機能から React Query にしようとかが可能です。
+
+### **記述量が少ない**
+
+これもかなり大きい要因。私自身も Redux のプロジェクトを React Query に載せ替えをしましたが、一つのエンドポイントでコード量が 1/3 くらいに減らすことができました。redux だと action,reducer などコード量がどうしても多くなってしまいますが、React Query の実際のコードで説明をすると・・axios の例だと以下のようになります。実際のプロジェクトでは上記のように使うことはあまりないようには思いますが、簡単に扱うことができるのは強みと言えますね。
+
+```js
+const { data, isLoading } = useQuery("posts", async () => {
+    const { data } = await axios.get(
+      "https://example.com/posts"
+    );
+    return data;
+  });
+}
+```
+
+## **Devtools がある**
+
+デバッグやパフォーマンスチューニングをする際に大変助かります。React Query の特徴としてキャッシュにデータを持たせています。なので、どのように取得したデータをキャッシュに入れるかどのキャッシュが古いのかなどが可視化されています。また、データをキャッシュする期間も設定できるのでパフォーマンスチューニングがしやすいのも特徴です。その際に Devtools があるとチューニングもしやすいですね。
+
+![Gif example](https://media.giphy.com/media/bSQQeX0Eq04YuBW0nr/giphy.gif)
+
+## **導入によって得た知見**
+
+ここまでが導入した理由なのですが、基本的に React Query をそのまま使ってもあまりパフォーマンスは向上しません。例えるならノーマルのミニ四駆みたいなもの。このセクションからは知見を記載します。
+
+### **defaultOptions を設定すべし**
+
+個人的には以下の設定に落ち着いた感じです。
+
+```js
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: 300000,
+    },
+  },
+});
+```
+
+retry：取得時にエラーが起きた後にデフォルトだと 3 回再取得を試みます。後述しますがラッパー関数でエラーハンドリングをするのならトーストなどを出せば良いので false にしています。refetchOnWindowFocus：これはブラウザ Window にマウスがフォーカスしたら refetch をします。開発時は助かるといえば助かるのですが、API を叩きすぎてしまっている事象があったり、rateLimit があったりするとものの数秒で終わってしまうなんてことも。staleTime：これは再取得までの保持期間みたいなもので、CacheTime がデフォルトで 5 分なのでそれに合わせて 5 分にしています。サービスの特性に合わせてこの辺りは検討する必要がありそう。
+
+### **ラッパー用のカスタム Hooks を作るべし**
+
+サービス開発においては共通処理で Toast を出したり、エラーログを API に送ったりする必要が出てきます。素のままの React Query だと、下記のように Component 側でコードを書かなければならずしんどいですよね。
+
+```js
+const { data, isLoading } = useQuery("posts", async () => {
+    const { data } = await axios.get(
+      "https://example.com/posts"
+    );
+    return data;
+  });
+}
+
+useEffect(() => {
+  if(isError) {
+    // Toast出したり
+  }
+},[isError])
+
+if(isLoading) return <Loader/>
+
+return (
+  // View
+)
+```
+
+なので、プロダクトでしたこととしてはラッパー Hooks 内で共通処理をするようにしました。下記の例では Query だけですが、Mutation についても同じように書くことができます。axios を例に書いてみます。axios の実装については正常時とエラー時どちらもレスポンスを返すようにします。
+
+```js
+export const api = axios.create({
+  baseURL: `http://jsonplaceholder.typicode.com/`,
+});
+
+api.interceptors.response.use(
+  (response) => {
+    return Promise.resolve(response);
+  },
+  (error) => {
+    return Promise.reject({
+      error: error.response,
+    });
+  }
+);
+```
+
+次に、ラッパーである  `useQueryWrapper`  ですが、この中で useQuery を使い return をさせています。そして、try/catch で axios から受け取る正常時は return して、エラー時は throw して例外を発生させます。ここでも  `return e.error`  などとしてしまうと、Component 側で  `isError: true`  にならない、data の中に error 内容が返ってきてしまいます。また catch 句で例えばトーストを出したりすることができます。
+
+```js
+type Props<T> = {
+  queryKey?: string;
+  deps?: QueryKey;
+  options?: UseQueryOptions;
+  req: () => Promise<AxiosResponse<T>>;
+};
+
+export const useQueryWrapper = <T>({
+  queryKey,
+  deps = [],
+  options,
+  req,
+}: Props<T>): UseQueryResult<T> => {
+  const k = Array.isArray(deps) ? [queryKey, ...deps] : [queryKey];
+  const result = useQuery(
+    k,
+    async () => {
+      try {
+        const res = await req();
+        return res.data;
+      } catch (e) {
+        // ここでトースト出したり
+        throw e.error;
+      }
+    },
+    options
+  ) as UseQueryResult<T>;
+
+  return result;
+};
+```
+
+そして最後にエンドポイントごとにカスタム hooks を作成します。下記の例だとユーザー一覧を取得します。
+
+```js
+export type TUseQueryOptions<T> = Partial<{
+  params: T;
+  deps: QueryKey;
+  options: UseQueryOptions;
+}>;
+
+export const useUsersQuery = ({
+  params,
+  deps,
+  options,
+}: TUseQueryOptions<Params>): UseQueryResult<User[]> => {
+  return useQueryWrapper<User[]>({
+    queryKey: "users",
+    deps,
+    options,
+    req: () => api.get("users", { params }),
+  });
+};
+```
+
+実際に Component 側で使うと・・・
+
+`const { isLoading, data, error, isError } = useUsersQuery({});`
+
+ラッパーを作る手間はあるのですが、この実装であれば共通処理をラッパーに閉じ込めることができるので、毎回 Component でエラー処理などを書かなくて済むようになりますね。小規模なサービスであれば素のままの React Query でも良いのかなと思うのですが、中規模以上だと結構しんどくなります。またエンドポイントごとにカスタム Hooks も作ることで、React Query のキャッシュ管理するために必要な QueryKey も管理しやすいかなと思います。QueryKey が一致しないと再取得できなかったりしてしまうので。
+
+### **パフォーマンスのチューニングがしやすい**
+
+### **pager**
+
+キャッシュに持っているので余計な API 通信が格段になくなります。例えば一覧系の pager とかがチューニングしやすいです。
+
+![https://user-images.githubusercontent.com/4245649/109303431-22345700-787e-11eb-94b2-7007451b2fba.png](https://user-images.githubusercontent.com/4245649/109303431-22345700-787e-11eb-94b2-7007451b2fba.png)
+
+最初のレンダーで 1 ページ目を取得 > 2 ページ目へ > 1 ページ目に戻ってくる。なんていうことありますよね。その際に、defaultOptions で設定した staleTime（上記では 5 分としている）で 5 分間はページ遷移をしてきても staleTime 内かつ QueryKey に変更がなければ再取得をしません。また、個別に指定することもできるので、ページの特性に合わせて長くしたり短くしたりすることができます。その際は options に staleTime を記載すれば OK です。さらに、prefetch もできるのでご興味のある方はこちらを参考にすると良いと思います。
+
+[Prefetching | React Query | TanStack](https://react-query.tanstack.com/examples/prefetching#_top)
+
+### **enabled と Querykey**
+
+先ほども書きましたが staleTime 内かつ QueryKey に変更がなければ再取得をしません。例えば、ユーザー一覧からユーザーを指定して取得するケースの場合。
+
+deps が QueryKey になるのですが、QueryKey には依存配列を入れることができるので下記の場合であればユーザーの ID に変更があれば取得してくれます。例えばユーザー ID が 1 を取得して、次に ID が 2 のユーザーのページであれば再取得をします。この際、Pager と全く同じ挙動なのですが、ID:1 のユーザー、ID:2 のユーザーどちらもキャッシュに保持してくれています。なので、再度 ID:1 もしくは ID:2 のユーザーのページ遷移した場合 staleTime 内であれば、再取得をしません。
+
+また、 `enabled: !!id,`  とすることで、id が存在する場合にのみ API を叩くので、空の状態で API を叩くなどのバグを潰すことができます。
+
+```js
+const { isLoading, data, error, isError } = useUsersQuery({
+  deps: [{ id }],
+  params: { id },
+  options: {
+    enabled: !!id,
+  },
+});
+```
+
+## **まとめ**
+
+- REST API なら React Query がファーストチョイスになりうる？
+- パフォーマンスチューニングがめっちゃしやすい
+- ラッパーがないと共通処理がめんどくさい
+- 規模が大きくなってきたときに QueryKey の管理方法が必要かも？（模索中）
