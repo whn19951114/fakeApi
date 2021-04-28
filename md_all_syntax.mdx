@@ -41,13 +41,41 @@ _You **can** combine them_
 
 ## Image
 
-![Caption](https://picsum.photos/50300)
+![Caption](https://picsum.photos/500/200)
 
 ## Link
 
 [GitHub](https://github.com)
 or
 https://github.com
+
+## Link preview card
+
+If `caption = "card"`, the URL will be rendered as a **preview card**. 🦄
+
+```js
+// good link
+[card](https://github.com)
+```
+[card](https://github.com/)
+
+----
+
+```js
+// bad link
+[card](https://gittttttttahub.com)
+```
+[card](https://gittttttttahub.com)
+
+----
+
+```js
+// normal link with
+[Won't be a card](https://github.com)
+```
+[Won't be a card](https://github.com)
+
+----
 
 ## Inline code
 
@@ -84,23 +112,23 @@ This is a breakline. ⬇️
 ## Blockquotes w/ color (⭐️ Original)
 
 :::success
-Content
+success
 :::
 
 :::info
-Content
+info
 :::
 
 :::warning
-Content
+warning
 :::
 
 :::error
-Content
+error
 :::
 
-:::aaa
-Content
+:::unknown
+unknown
 :::
 
 ## Unsupported yet.
